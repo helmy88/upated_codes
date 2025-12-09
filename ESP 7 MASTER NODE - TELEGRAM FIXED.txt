@@ -1,5 +1,5 @@
-// ESP 1: MASTER NODE - TELEGRAM FIXED VERSION (Final Optimized Code)
-// This version includes the fix for the BearSSL/Telegram error and enhanced logging.
+// ESP 1: MASTER NODE - TELEGRAM FIXED VERSION (Final Optimized & Cleaned)
+// Cleaned of all stray unicode characters (NBSP, 0xC2 0xA0)
 
 #include <Keypad.h>
 #include <Wire.h>
@@ -12,12 +12,10 @@
 #include <time.h>
 
 // --- CONFIGURATION ---
-// IMPORTANT: REPLACE WITH YOUR OWN WIFI DETAILS
 #define WIFI_SSID "putez"
 #define WIFI_PASSWORD "zulaikha"
 
 // --- TELEGRAM CREDENTIALS ---
-// NOTE: Ensure you have sent the /start command to your bot from the CHAT_ID account!
 #define BOT_TOKEN "8527056749:AAFZyQRBSGjPq_EFg0Wa58JTS4s-FnT5rD4"
 #define CHAT_ID "628920149"
 
@@ -30,8 +28,8 @@ uint8_t slaveMac[] = {0x84, 0x0D, 0x8E, 0xA7, 0xAE, 0x54};
 
 // --- DATA STRUCTURE ---
 typedef struct struct_message {
-    bool commandUnlock;
-    int rfidStatus;
+    bool commandUnlock;
+    int rfidStatus;
 } struct_message;
 
 struct_message outgoingData;
@@ -46,13 +44,15 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 const byte ROWS = 4;
 const byte COLS = 4;
 char keys[ROWS][COLS] = {
-    {'1','4','7','*'},
-    {'2','5','8','0'},
-    {'3','6','9','#'},
-    {'A','B','C','D'}
+    {'1','4','7','*'},
+    {'2','5','8','0'},
+    {'3','6','9','#'},
+    {'A','B','C','D'}
 };
+
 byte rowPins[ROWS] = {D1, D2, D5, D6};
 byte colPins[COLS] = {D7, D0, D3, D4};
+
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
 String password = "12345678";
@@ -60,261 +60,214 @@ String inputPassword = "";
 
 // --- FUNCTIONS ---
 
-/**
- * @brief Displays a message on the 16x2 LCD.
- */
 void showMessage(String line1, String line2) {
-    lcd.clear();
-    lcd.setCursor(0,0);
-    lcd.print(line1);
-    lcd.setCursor(0,1);
-    lcd.print(line2);
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(line1);
+    lcd.setCursor(0, 1);
+    lcd.print(line2);
 }
 
-/**
- * @brief Sends a message to the Telegram bot with retries and checks.
- */
 void sendTelegramAlert(String message) {
-    // Pre-flight checks for reliable Telegram operation
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("❌ WiFi Disconnected - Cannot send Telegram.");
-        return;
-    }
-    
-    time_t now = time(nullptr);
-    if (now < 24 * 3600) {
-        Serial.println("❌ Time not synced - Cannot send Telegram (SSL failure likely).");
-        return;
-    }
-    
-    // Memory check (Ensuring enough heap for SSL handshake)
-    uint32_t freeHeap = ESP.getFreeHeap();
-    Serial.printf("Free Heap: %d bytes\n", freeHeap);
-    
-    if (freeHeap < 15000) {
-        Serial.println("❌ Low Memory (<15KB) - Postponing Telegram send.");
-        return;
-    }
-    
-    Serial.println("📤 Sending Telegram...");
-    Serial.println("Message: " + message);
-    
-    // Ensure client is stopped before starting a new transaction
-    if (client.connected()) {
-        client.stop();
-        delay(100);
-    }
-    
-    // Attempt to send with retry
-    bool success = false;
-    for (int attempt = 1; attempt <= 2; attempt++) {
-        Serial.printf("Attempt %d...\n", attempt);
-        
-        success = bot.sendMessage(CHAT_ID, message, "");
-        
-        if (success) {
-            Serial.println("✅ Telegram SENT!");
-            break;
-        } else {
-            // FIX: client.getLastSSLError() returns an int, not a string
-            Serial.printf("❌ Attempt %d failed. SSL Error Code: %d\n", attempt, client.getLastSSLError());
-            if (attempt < 2) {
-                delay(2000); // Wait before retry
-            }
-        }
-    }
-    
-    if (!success) {
-        Serial.println("❌ All attempts failed. Possible network, bot, or token error.");
-    }
-    
-    // Cleanup
-    client.stop();
-    delay(100);
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi disconnected - cannot send telegram.");
+        return;
+    }
+
+    time_t now = time(nullptr);
+    if (now < 24 * 3600) {
+        Serial.println("Time not synced - SSL will fail.");
+        return;
+    }
+
+    uint32_t freeHeap = ESP.getFreeHeap();
+    Serial.printf("Free Heap: %d bytes\n", freeHeap);
+
+    if (freeHeap < 15000) {
+        Serial.println("Low memory - delaying telegram.");
+        return;
+    }
+
+    Serial.println("Sending Telegram...");
+    Serial.println("Message: " + message);
+
+    if (client.connected()) {
+        client.stop();
+        delay(100);
+    }
+
+    bool success = false;
+    for (int attempt = 1; attempt <= 2; attempt++) {
+        Serial.printf("Attempt %d...\n", attempt);
+
+        success = bot.sendMessage(CHAT_ID, message, "");
+
+        if (success) {
+            Serial.println("Telegram sent successfully!");
+            break;
+        } else {
+            Serial.printf("Attempt %d failed. SSL Error: %d\n",
+                          attempt, client.getLastSSLError());
+            if (attempt < 2) delay(2000);
+        }
+    }
+
+    if (!success) {
+        Serial.println("All attempts failed. Check token, network, or bot.");
+    }
+
+    client.stop();
+    delay(100);
 }
 
-/**
- * @brief Sends the unlock command via ESP-NOW to the Slave.
- */
 void sendUnlockCommand() {
-    outgoingData.commandUnlock = true;
-    outgoingData.rfidStatus = 0;
-    esp_now_send(slaveMac, (uint8_t *) &outgoingData, sizeof(outgoingData));
+    outgoingData.commandUnlock = true;
+    outgoingData.rfidStatus = 0;
+    esp_now_send(slaveMac, (uint8_t *)&outgoingData, sizeof(outgoingData));
 }
 
-// --- ESP-NOW CALLBACKS ---
-void OnDataSent(uint8_t *mac_addr, uint8_t sendStatus) { 
-    // This callback confirms if the message was successfully sent to the slave.
-    // Serial.printf("Last Packet Send Status: %d\n", sendStatus);
+void OnDataSent(uint8_t *mac_addr, uint8_t sendStatus) {
+    // Optional debug: Serial.printf("ESP-NOW Sent: %d\n", sendStatus);
 }
 
-/**
- * @brief Receives data from the Slave node (e.g., RFID status).
- */
-void OnDataRecv(uint8_t * mac, uint8_t * incomingData, uint8_t len) {
-    struct_message receivedData;
-    memcpy(&receivedData, incomingData, sizeof(receivedData));
-    
-    if (receivedData.rfidStatus == 1) { // Success/Granted
-        telegramType = 1;
-        telegramNeeded = true;
-    }
-    else if (receivedData.rfidStatus == 2) { // Failed/Denied
-        telegramType = 2;
-        telegramNeeded = true;
-    }
+void OnDataRecv(uint8_t *mac, uint8_t *incomingData, uint8_t len) {
+    struct_message receivedData;
+    memcpy(&receivedData, incomingData, sizeof(receivedData));
+
+    if (receivedData.rfidStatus == 1) {
+        telegramType = 1;
+        telegramNeeded = true;
+    } else if (receivedData.rfidStatus == 2) {
+        telegramType = 2;
+        telegramNeeded = true;
+    }
 }
 
-/**
- * @brief Handles PIN check logic from the Keypad.
- */
 void checkPassword() {
-    if (inputPassword == password) {
-        showMessage("PIN ACCEPTED", "Unlocking...");
-        sendUnlockCommand();
-        sendTelegramAlert("🔓 Door Unlocked via PIN");
-        delay(3000);
-        showMessage("Enter PIN:", "");
-    } else {
-        showMessage("ACCESS DENIED", "Try Again");
-        sendTelegramAlert("⚠️ Failed PIN Attempt");
-        delay(2000);
-        showMessage("Enter PIN:", "");
-    }
-    inputPassword = "";
+    if (inputPassword == password) {
+        showMessage("PIN ACCEPTED", "Unlocking...");
+        sendUnlockCommand();
+        sendTelegramAlert("Door Unlocked via PIN");
+        delay(3000);
+    } else {
+        showMessage("ACCESS DENIED", "Try Again");
+        sendTelegramAlert("Failed PIN Attempt");
+        delay(2000);
+    }
+
+    showMessage("Enter PIN:", "");
+    inputPassword = "";
 }
 
-/**
- * @brief Synchronizes the system time using NTP for SSL/Telegram.
- */
 void syncTime() {
-    showMessage("Syncing Time...", "Please Wait");
-    Serial.println("⏰ Setting time using SNTP (GMT+8)");
-    
-    // GMT+8 for Malaysia - Adjust the first parameter (8 * 3600) for your timezone
-    configTime(8 * 3600, 0, "pool.ntp.org", "time.nist.gov");
-    
-    time_t now = time(nullptr);
-    int retries = 0;
-    
-    while (now < 24 * 3600 && retries < 60) {
-        delay(500);
-        Serial.print(".");
-        now = time(nullptr);
-        retries++;
-    }
-    
-    if (now > 24 * 3600) {
-        Serial.println("\n✅ Time Synced!");
-        showMessage("Time Synced!", "");
-    } else {
-        Serial.println("\n❌ Time Sync FAILED - Telegram will likely fail.");
-        showMessage("Time Error", "Telegram Disabled");
-    }
+    showMessage("Syncing Time...", "Please Wait");
+    Serial.println("Syncing NTP time...");
+
+    configTime(8 * 3600, 0, "pool.ntp.org", "time.nist.gov");
+
+    time_t now = time(nullptr);
+    int retries = 0;
+
+    while (now < 24 * 3600 && retries < 60) {
+        delay(500);
+        Serial.print(".");
+        now = time(nullptr);
+        retries++;
+    }
+
+    if (now > 24 * 3600) {
+        Serial.println("\nTime synced!");
+        showMessage("Time Synced!", "");
+    } else {
+        Serial.println("\nTime sync failed.");
+        showMessage("Time Error", "Telegram Disabled");
+    }
 }
 
 void setup() {
-    Serial.begin(115200);
-    delay(100);
-    Serial.println("\n\n=== ESP8266 Master Node Booting ===");
-    
-    // Initialize LCD
-    lcd.init();
-    lcd.backlight();
-    showMessage("Booting...", "WiFi Init");
-    
-    // 1. WiFi Setup
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    
-    // SSL SETTINGS (critical for ESP8266 Telegram)
-    client.setInsecure(); // Less secure, but required for wide compatibility on ESP8266
-    client.setBufferSizes(2048, 512);
-    
-    int timeout = 0;
-    while (WiFi.status() != WL_CONNECTED && timeout < 40) {
-        delay(500);
-        Serial.print(".");
-        timeout++;
-    }
-    
-    if (WiFi.status() == WL_CONNECTED) {
-        showMessage("WiFi Connected", "Syncing Time...");
-        Serial.println("\n✅ WiFi Connected");
-        
-        // 2. Time Sync (Essential for SSL/Telegram)
-        syncTime();
-        
-    } else {
-        showMessage("WiFi Failed", "Offline Mode");
-        Serial.println("\n❌ WiFi Failed - System operating in Offline Mode (No Telegram)");
-    }
-    
-    delay(500);
-    
-    // 3. ESP-NOW Setup
-    if (esp_now_init() != 0) {
-        Serial.println("❌ ESP-NOW Init Failed");
-        return;
-    }
-    
-    esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
-    esp_now_add_peer(slaveMac, ESP_NOW_ROLE_COMBO, 1, NULL, 0);
-    esp_now_register_send_cb(OnDataSent);
-    esp_now_register_recv_cb(OnDataRecv);
-    
-    Serial.println("✅ ESP-NOW Initialized");
-    
-    // 4. Test Telegram (Only if WiFi/Time is OK)
-    if (WiFi.status() == WL_CONNECTED && time(nullptr) > 24*3600) {
-        Serial.println("\n--- Testing Telegram Connection ---");
-        sendTelegramAlert("🚀 System Started - Master Online (New Bot Config)");
-    }
-    
-    showMessage("System Ready", "Enter PIN:");
-    Serial.println("\n=== System Ready ===\n");
+    Serial.begin(115200);
+    delay(100);
+    Serial.println("\nESP8266 Master Booting...");
+
+    lcd.init();
+    lcd.backlight();
+    showMessage("Booting...", "WiFi Init");
+
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+    client.setInsecure();
+    client.setBufferSizes(2048, 512);
+
+    int timeout = 0;
+    while (WiFi.status() != WL_CONNECTED && timeout < 40) {
+        delay(500);
+        Serial.print(".");
+        timeout++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\nWiFi Connected.");
+        showMessage("WiFi Connected", "Syncing Time...");
+        syncTime();
+    } else {
+        Serial.println("\nWiFi Failed.");
+        showMessage("WiFi Failed", "Offline Mode");
+    }
+
+    if (esp_now_init() != 0) {
+        Serial.println("ESP-NOW init failed!");
+        return;
+    }
+
+    esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
+    esp_now_add_peer(slaveMac, ESP_NOW_ROLE_COMBO, 1, NULL, 0);
+    esp_now_register_send_cb(OnDataSent);
+    esp_now_register_recv_cb(OnDataRecv);
+
+    Serial.println("ESP-NOW Initialized");
+
+    if (WiFi.status() == WL_CONNECTED && time(nullptr) > 24 * 3600) {
+        sendTelegramAlert("System Started - Master Online");
+    }
+
+    showMessage("System Ready", "Enter PIN:");
 }
 
 void loop() {
-    // Handle Telegram notifications from ESP-NOW received data
-    if (telegramNeeded) {
-        telegramNeeded = false;
-        
-        if (telegramType == 1) { // RFID Success
-            showMessage("RFID SCANNED", "ACCESS GRANTED");
-            sendTelegramAlert("✅ Door Unlocked via RFID");
-        }
-        else if (telegramType == 2) { // RFID Failed
-            showMessage("RFID SCANNED", "ACCESS DENIED!");
-            sendTelegramAlert("🚨 Unauthorized RFID Scan!");
-        }
-        
-        // Reset display and password input after notification
-        delay(2000);
-        showMessage("Enter PIN:", "");
-        inputPassword = "";
-    }
-    
-    // Handle Keypad input
-    char key = keypad.getKey();
-    if (key) {
-        if (key == '#') {
-            checkPassword();
-        }
-        else if (key == '*') {
-            inputPassword = "";
-            showMessage("Enter PIN:", "");
-        }
-        else if (key >= '0' && key <= '9') { // Only process digits for PIN
-            if (inputPassword.length() < 16) {
-                inputPassword += key;
-                lcd.setCursor(0, 1);
-                String stars = "";
-                for(int i=0; i<inputPassword.length(); i++) stars += "*";
-                lcd.print(stars);
-            }
-        }
-    }
-    
-    yield(); // Important for ESP8266 stability
+    if (telegramNeeded) {
+        telegramNeeded = false;
+
+        if (telegramType == 1) {
+            showMessage("RFID SCANNED", "ACCESS GRANTED");
+            sendTelegramAlert("Door Unlocked via RFID");
+        } else if (telegramType == 2) {
+            showMessage("RFID SCANNED", "ACCESS DENIED!");
+            sendTelegramAlert("Unauthorized RFID Scan!");
+        }
+
+        delay(2000);
+        showMessage("Enter PIN:", "");
+        inputPassword = "";
+    }
+
+    char key = keypad.getKey();
+    if (key) {
+        if (key == '#') {
+            checkPassword();
+        } else if (key == '*') {
+            inputPassword = "";
+            showMessage("Enter PIN:", "");
+        } else if (key >= '0' && key <= '9') {
+            if (inputPassword.length() < 16) {
+                inputPassword += key;
+                lcd.setCursor(0, 1);
+                String stars = "";
+                for (int i = 0; i < inputPassword.length(); i++) stars += "*";
+                lcd.print(stars);
+            }
+        }
+    }
+
+    yield();
 }
